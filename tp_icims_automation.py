@@ -8,6 +8,9 @@ from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 from playwright_stealth import stealth_sync
 
+from tp_branches import match_site_option, nearest_tp_branch
+from tp_locations import resolve_tp_site
+
 load_dotenv()
 
 # --- CONFIGURATION ---
@@ -28,11 +31,18 @@ def human_type(locator, text):
 
 # --- LOGIC HELPERS ---
 def get_region_link(location):
-    loc = str(location).lower()
-    vismin_keywords = ["cebu", "davao", "cdo", "iloilo", "bacolod", "bohol", "leyte", "samar", "mindanao", "visayas", "zamboanga", "agusan", "surigao", "misamis", "negros"]
-    if any(kw in loc for kw in vismin_keywords):
+    if resolve_tp_site(location) == "vismin":
         return LINK_VISMIN
     return LINK_LUZON
+
+def choose_preferred_site(frame, location):
+    branch = nearest_tp_branch(location)
+    dropdown = frame.locator("select[name='q_prefer_site']")
+    options = dropdown.locator("option").all_text_contents()
+    label = match_site_option(branch, options)
+    if not label:
+        raise RuntimeError(f"Preferred site {branch} is not in the Teleperformance list")
+    dropdown.select_option(label=label)
 
 def setup_gspread():
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -183,7 +193,7 @@ def process_tp_candidates():
                     human_type(frame.locator("input[name='q_upload_speed']"), "100")
                     frame.locator("input[name='q_currently_enrolled'][value='No']").check()
                     
-                    frame.locator("select[name='q_prefer_site']").select_option(index=1)
+                    choose_preferred_site(frame, location)
                     frame.locator("select[name='q_best_time_call']").select_option(label="Anytime")
                     frame.locator("select[name='q_other_contact']").select_option(label="Others")
                     human_type(frame.locator("input[name='q_other_contact_info']"), phone)
