@@ -4,4 +4,5 @@ google-auth-oauthlib
 google-auth-httplib2
 python-dotenv
 playwright
-playwright-stealth
+playwright-stealth==1.0.6
+setuptools==80.10.2
