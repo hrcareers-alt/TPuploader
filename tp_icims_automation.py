@@ -23,7 +23,6 @@ def human_delay(min_ms=1000, max_ms=3000):
     time.sleep(random.uniform(min_ms, max_ms) / 1000.0)
 
 def human_type(locator, text):
-    # Simulates human typing speed with delays between keystrokes
     locator.type(text, delay=random.randint(50, 150))
     human_delay(500, 1000)
 
@@ -42,12 +41,9 @@ def setup_gspread():
 
 def process_tp_candidates():
     gc = setup_gspread()
-    
-    # Using the primary sheet for this example; loop through targets as needed
     doc = gc.open_by_url(SHEET_URL_1)
     
     with sync_playwright() as p:
-        # Launch with arguments to reduce bot detection
         browser = p.chromium.launch(
             headless=True,
             args=["--disable-blink-features=AutomationControlled"]
@@ -57,7 +53,6 @@ def process_tp_candidates():
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         
-        # We will loop through tabs that have "TP" columns
         tabs_to_process = ["MODERN TRACTION", "JOBSTREET", "VALID CONSENT - TP, FVR & EXL"]
         
         for tab_name in tabs_to_process:
@@ -71,7 +66,6 @@ def process_tp_candidates():
             
             headers = [h.strip() for h in data[0]]
             
-            # Find target columns dynamically
             tp_col = next((i for i, h in enumerate(headers) if "TP" in h.upper()), None)
             pref_col = next((i for i, h in enumerate(headers) if "PREFERRED" in h.upper() or "ENDORSE" in h.upper()), None)
             
@@ -79,46 +73,54 @@ def process_tp_candidates():
                 continue
                 
             for row_idx, row in enumerate(data[1:], start=2):
-                # Ensure row has enough columns
                 if len(row) <= tp_col:
                     row.extend([""] * (tp_col - len(row) + 1))
                 
-                # Check for empty TP remark
                 tp_remark = row[tp_col].strip()
                 if tp_remark:
-                    continue # Skip filled remarks
+                    continue
                 
                 pref_val = row[pref_col].strip().upper()
                 if "TELEPERFORMANCE" not in pref_val and "ALL OF THE ABOVE" not in pref_val:
                     ws.update_cell(row_idx, tp_col + 1, "EXECUTIVE TEAM / N")
                     continue
                 
-                # Extract candidate info (using standard indexing based on standard sheet layout)
                 first_name = row[headers.index("First Name")] if "First Name" in headers else ""
                 last_name = row[headers.index("Last Name")] if "Last Name" in headers else ""
-                email = row[headers.index("Email Address")] if "Email Address" in headers else row[5] # fallback
-                phone = row[headers.index("Mobile Number")] if "Mobile Number" in headers else row[4] # fallback
+                email = row[headers.index("Email Address")] if "Email Address" in headers else row[5]
+                phone = row[headers.index("Mobile Number")] if "Mobile Number" in headers else row[4]
                 location = row[headers.index("Location") if "Location" in headers else headers.index("City")] 
                 education = row[headers.index("Highest Educational")] if "Highest Educational" in headers else ""
                 
+                # Setup Character Reference Data
+                cr_name_idx = next((i for i, h in enumerate(headers) if "CHARACTER REF" in h.upper() and "NAME" in h.upper()), None)
+                cr_email_idx = next((i for i, h in enumerate(headers) if "CHARACTER REF" in h.upper() and "EMAIL" in h.upper()), None)
+                cr_phone_idx = next((i for i, h in enumerate(headers) if "CHARACTER REF" in h.upper() and ("NUMBER" in h.upper() or "CONTACT" in h.upper() or "PHONE" in h.upper())), None)
+
+                cr_name_raw = row[cr_name_idx].strip() if cr_name_idx is not None and len(row) > cr_name_idx else ""
+                cr_email_raw = row[cr_email_idx].strip() if cr_email_idx is not None and len(row) > cr_email_idx else ""
+                cr_phone_raw = row[cr_phone_idx].strip() if cr_phone_idx is not None and len(row) > cr_phone_idx else ""
+
+                # Fallback Logic for Character References
+                cr_first = cr_name_raw.split()[0] if cr_name_raw else first_name
+                cr_last = " ".join(cr_name_raw.split()[1:]) if len(cr_name_raw.split()) > 1 else (last_name if not cr_name_raw else "")
+                cr_email = cr_email_raw if cr_email_raw else email
+                cr_phone = cr_phone_raw if cr_phone_raw else phone
+
                 job_link = get_region_link(location)
-                
                 page = context.new_page()
-                stealth_sync(page) # APPLY STEALTH TO MASK BOT IDENTITY
+                stealth_sync(page)
                 
                 try:
                     page.goto(job_link)
                     human_delay(2000, 4000)
                     
-                    # iCIMS often loads the job portal in an iframe
                     frame = page.frame_locator("iframe#icims_content_iframe")
                     
-                    # Click Apply
                     apply_btn = frame.locator("a[title*='Apply for this Job']").first
                     apply_btn.click()
                     human_delay(3000, 5000)
                     
-                    # Email entry & Privacy check
                     email_input = frame.locator("input[name='email']")
                     human_type(email_input, email)
                     
@@ -128,60 +130,50 @@ def process_tp_candidates():
                     
                     human_delay(4000, 7000)
                     
-                    # Determine if it asked for login or proceeded to form
                     if frame.locator("input[name='password']").count() > 0 and frame.locator("input#loginSubmitButton").count() > 0:
-                        # Proceeds to existing login
                         ws.update_cell(row_idx, tp_col + 1, "EXECUTIVE TEAM / E")
                         page.close()
                         continue
                     
-                    # Proceeds to Form -> Fill out profile
                     human_type(frame.locator("input[name='password']"), "Job_offer#247")
                     human_type(frame.locator("input[name='password_verify']"), "Job_offer#247")
                     
                     human_type(frame.locator("input[name='firstname']"), first_name)
                     human_type(frame.locator("input[name='lastname']"), last_name)
                     
-                    # Phone details
                     frame.locator("select[name='phone_type']").select_option(label="Mobile")
                     human_type(frame.locator("input[name='phone_number']"), phone)
                     frame.locator("input[name='text_messages_consent'][value='Yes']").check()
                     
-                    # Referral details
                     frame.locator("select[name='how_did_you_hear']").select_option(label="Agencies")
                     human_delay(1000, 2000)
                     human_type(frame.locator("input[name='how_did_you_hear_specify']"), "Edward Belacse Career Consultancy Services")
                     
-                    # Address Details
                     frame.locator("select[name='address_type']").select_option(label="Physical")
                     frame.locator("select[name='country']").select_option(label="Philippines")
                     human_type(frame.locator("input[name='address']"), location)
                     human_type(frame.locator("input[name='city']"), location)
                     human_type(frame.locator("input[name='state']"), location)
                     
-                    # Emergency Contacts
                     human_type(frame.locator("input[name='emergency_contact_name']"), f"{first_name} {last_name}")
                     human_type(frame.locator("input[name='emergency_contact_phone']"), phone)
                     human_type(frame.locator("input[name='emergency_contact_secondary_phone']"), phone)
                     human_type(frame.locator("input[name='emergency_contact_email']"), email)
-                    human_type(frame.locator("input[name='emergency_contact_postal_code']"), "1000") # Dummy zip code fallback
+                    human_type(frame.locator("input[name='emergency_contact_postal_code']"), "1000")
                     human_type(frame.locator("input[name='emergency_contact_state']"), location)
                     human_type(frame.locator("input[name='emergency_contact_city']"), location)
                     frame.locator("select[name='emergency_contact_country']").select_option(label="Philippines")
                     human_type(frame.locator("input[name='emergency_contact_address1']"), location)
                     human_type(frame.locator("input[name='emergency_contact_address2']"), location)
                     
-                    # Education Section
                     frame.locator("select[name='degree']").select_option(label=education)
                     human_type(frame.locator("input[name='major']"), "N/A")
                     human_type(frame.locator("input[name='school']"), education)
                     frame.locator("select[name='finished_school']").select_option(label="Yes")
                     
-                    # Click Submit Profile
                     frame.locator("input[value='Submit Profile']").click()
                     human_delay(4000, 6000)
                     
-                    # Questions Section
                     frame.locator("input[name='q_18_years'][value='Yes']").check()
                     frame.locator("input[name='q_amenable_wah'][value='Yes']").check()
                     frame.locator("input[name='q_employed_tp'][value='No']").check()
@@ -191,7 +183,7 @@ def process_tp_candidates():
                     human_type(frame.locator("input[name='q_upload_speed']"), "100")
                     frame.locator("input[name='q_currently_enrolled'][value='No']").check()
                     
-                    frame.locator("select[name='q_prefer_site']").select_option(index=1) # Selects first available site
+                    frame.locator("select[name='q_prefer_site']").select_option(index=1)
                     frame.locator("select[name='q_best_time_call']").select_option(label="Anytime")
                     frame.locator("select[name='q_other_contact']").select_option(label="Others")
                     human_type(frame.locator("input[name='q_other_contact_info']"), phone)
@@ -206,14 +198,13 @@ def process_tp_candidates():
                     human_type(frame.locator("input[name='q_expected_salary']"), "21000")
                     frame.locator("select[name='q_start_working']").select_option(label="ASAP")
                     
-                    # Character Reference (using character info logic)
-                    human_type(frame.locator("input[name='ref_first_name']"), first_name)
-                    human_type(frame.locator("input[name='ref_last_name']"), last_name)
-                    human_type(frame.locator("input[name='ref_email']"), email)
-                    human_type(frame.locator("input[name='ref_phone']"), phone)
+                    # Applied Character Reference Fallback Logic
+                    human_type(frame.locator("input[name='ref_first_name']"), cr_first)
+                    human_type(frame.locator("input[name='ref_last_name']"), cr_last)
+                    human_type(frame.locator("input[name='ref_email']"), cr_email)
+                    human_type(frame.locator("input[name='ref_phone']"), cr_phone)
                     human_type(frame.locator("input[name='ref_company']"), "N/A")
                     
-                    # Sign & Submit
                     frame.locator("input#signature_checkbox").check()
                     frame.locator("input[value='Save & Return Later']").click()
                     human_delay(3000, 5000)
