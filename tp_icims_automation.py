@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 from playwright_stealth import stealth_sync
 
+from tp_locations import resolve_tp_site
+
 load_dotenv()
 
 # --- CONFIGURATION ---
@@ -28,9 +30,7 @@ def human_type(locator, text):
 
 # --- LOGIC HELPERS ---
 def get_region_link(location):
-    loc = str(location).lower()
-    vismin_keywords = ["cebu", "davao", "cdo", "iloilo", "bacolod", "bohol", "leyte", "samar", "mindanao", "visayas", "zamboanga", "agusan", "surigao", "misamis", "negros"]
-    if any(kw in loc for kw in vismin_keywords):
+    if resolve_tp_site(location) == "vismin":
         return LINK_VISMIN
     return LINK_LUZON
 
